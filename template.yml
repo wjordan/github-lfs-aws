@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  DomainName:
+    Type: String
+    Description: Subdomain where the LFS Server API will be deployed, and a DNS record will be created in Route53
+  HostedZoneName:
+    Type: String
+    Description: Hosted Zone where the new DNS record will be created. Must end with a trailing dot `.`
+    AllowedPattern: .*\.$
+    ConstraintDescription: Must end with trailing dot `.`
+  CertificateArn:
+    Type: String
+    Description: ACM Certificate ARN covering the domain name, may be a wilcard cert
+  GithubRepo:
+    Type: String
+    Description: Github Owner/Repo used to verify repository write access for LFS uploads
+    AllowedPattern: '[^/]+/[^.]+'
+    ConstraintDescription: Full Github repository path (owner/repo)
+  S3Bucket:
+    Type: String
+    Description: Name of new S3 Bucket to create for storing LFS objects
+Resources:
+  GitLFSBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3Bucket
+      AccelerateConfiguration:
+        AccelerationStatus: Enabled
+  GithubLFS:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs8.10
+      CodeUri: ./GithubLFS
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref GitLFSBucket
+          REPO: !Ref GithubRepo
+      Policies:
+      - AWSLambdaBasicExecutionRole
+      - Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action:
+          - 's3:PutObject'
+          - 's3:PutObjectAcl'
+          Resource: !Sub "arn:aws:s3:::${GitLFSBucket}/*"
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            Path: /
+            Method: get
+        BatchAPI:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+  APIDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      CertificateArn: !Ref CertificateArn
+      DomainName: !Ref DomainName
+  GithubLFSBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref APIDomainName
+      RestApiId: !Ref ServerlessRestApi
+      Stage: Prod
+  APIDomain:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Ref HostedZoneName
+      RecordSets:
+      - Name: !Ref DomainName
+        Type: A
+        AliasTarget:
+          DNSName: !GetAtt APIDomainName.DistributionDomainName
+          HostedZoneId: Z2FDTNDATAQYW2 # static ID for CloudFront aliases
+Outputs:
+  URL:
+    Value: !Sub "https://${DomainName}"
